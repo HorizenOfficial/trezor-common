@@ -30,11 +30,6 @@ class CoinDef(p.MessageType):
         24: ('min_address_length', p.UVarintType, 0),
         25: ('max_address_length', p.UVarintType, 0),
         26: ('icon', p.BytesType, 0),
-        27: ('version_group_id', p.UVarintType, 0),
-        28: ('website', p.UnicodeType, 0),
-        29: ('github', p.UnicodeType, 0),
-        30: ('maintainer', p.UnicodeType, 0),
-        31: ('blocktime_seconds', p.UVarintType, 0),
     }
 
     def __init__(
@@ -65,14 +60,7 @@ class CoinDef(p.MessageType):
         min_address_length: int = None,
         max_address_length: int = None,
         icon: bytes = None,
-        version_group_id: int = None,
-        website: str = None,
-        github: str = None,
-        maintainer: str = None,
-        blocktime_seconds: int = None,
-        default_fee_b: dict = None,
-        bitcore: dict = None,
-        blockbook: dict = None
+        **kwargs
     ):
         self.coin_name = coin_name
         self.coin_shortcut = coin_shortcut
@@ -100,12 +88,4 @@ class CoinDef(p.MessageType):
         self.min_address_length = min_address_length
         self.max_address_length = max_address_length
         self.icon = icon
-        self.version_group_id = version_group_id
-        self.website = website
-        self.github = github
-        self.maintainer = maintainer
-        self.blocktime_seconds = blocktime_seconds
-        self.default_fee_b = default_fee_b
-        self.bitcore = bitcore
-        self.blockbook = blockbook
-        p.MessageType.__init__(self)
+        p.MessageType.__init__(self, **kwargs)
