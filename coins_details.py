@@ -4,33 +4,59 @@ import time
 import json
 import requests
 import pprint
+import ethereum_tokens_gen
 
-SKIP_COINMARKETCAP = True
+COINS = {}
+
+def coinmarketcap_init():
+    global COINS
+
+    try:
+        COINS = json.load(open('coinmarketcap.json', 'r'))
+    except FileNotFoundError:
+        pass
+    else:
+        if COINS["1"]["last_updated"] > time.time() - 3600:
+            print("Using local cache of coinmarketcap")
+            return
+
+    print("Updating coins from coinmarketcap")
+    total = None
+    COINS = {}
+
+    while total is None or len(COINS) < total:
+        url = 'https://api.coinmarketcap.com/v2/ticker/?start=%d&convert=USD&limit=100' % (len(COINS)+1)
+        data = requests.get(url).json()
+        COINS.update(data['data'])
+        if total is None:
+            total = data['metadata']['num_cryptocurrencies']
+
+        print("Fetched %d of %d coins" % (len(COINS), total))
+        time.sleep(1)
+
+    json.dump(COINS, open('coinmarketcap.json', 'w'), sort_keys=True, indent=4)
+
 
 def coinmarketcap_info(shortcut):
-    if SKIP_COINMARKETCAP:
-        raise Exception("Skipping coinmarketcap call")
+    global COINS
+    shortcut = shortcut.replace(' ', '-').lower()
 
-    shortcut = shortcut.replace(' ', '-')
-    url = 'https://api.coinmarketcap.com/v1/ticker/%s/?convert=USD' % shortcut
-    try:
-        return requests.get(url).json()[0]
-    except KeyboardInterrupt:
-        raise
-    except:
-        print("Cannot fetch Coinmarketcap info for %s" % shortcut)
+    for _id in COINS:
+        coin = COINS[_id]
+        #print(shortcut, coin['website_slug'])
+        if shortcut == coin['website_slug']:
+            #print(coin)
+            return coin
 
 def update_marketcap(obj, shortcut):
     try:
-        obj['marketcap_usd'] = int(float(coinmarketcap_info(shortcut)['market_cap_usd']))
+        obj['marketcap_usd'] = int(float(coinmarketcap_info(shortcut)['quotes']['USD']['market_cap']))
     except:
         pass
+        # print("Marketcap info not found for", shortcut)
 
 def coinmarketcap_global():
-    if SKIP_COINMARKETCAP:
-        raise Exception("Skipping coinmarketcap call")
-
-    url = 'https://api.coinmarketcap.com/v1/global'
+    url = 'https://api.coinmarketcap.com/v2/global'
     ret = requests.get(url)
     data = ret.json()
     return data
@@ -41,11 +67,12 @@ def set_default(obj, key, default_value):
 def update_info(details):
     details['info']['updated_at'] = int(time.time())
     details['info']['updated_at_readable'] = time.asctime()
-    details['info']['t1_coins'] = len([True for _, c in details['coins'].items() if c['t1_enabled'] == 'yes'])
-    details['info']['t2_coins'] = len([True for _, c in details['coins'].items() if c['t2_enabled'] == 'yes'])
-    
+
+    details['info']['t1_coins'] = len([True for _, c in details['coins'].items() if c['t1_enabled'] == 'yes' and not c.get('hidden', False)])
+    details['info']['t2_coins'] = len([True for _, c in details['coins'].items() if c['t2_enabled'] == 'yes' and not c.get('hidden', False)])
+
     try:
-        details['info']['total_marketcap_usd'] = int(coinmarketcap_global()['total_market_cap_usd'])
+        details['info']['total_marketcap_usd'] = int(coinmarketcap_global()['data']['quotes']['USD']['total_market_cap'])
     except:
         pass
 
@@ -85,66 +112,61 @@ def update_coins(details):
     check_unsupported(details, 'coin:', supported)
 
 def update_erc20(details):
-    networks = [
-        ('eth', 1),
-        # ('exp', 2),
-        # ('rop', 3),
-        ('rin', 4),
-        ('ubq', 8),
-        # ('rsk', 30),
-        ('kov', 42),
-        ('etc', 61),
+    networks = ['eth',
+        'exp',
+        # 'rop',
+        # 'rin',
+        'ubq',
+        # 'rsk',
+        # 'kov',
+        'etc',
     ]
 
-    # Fetch list of tokens already included in Trezor Core
-    r = requests.get('https://raw.githubusercontent.com/trezor/trezor-core/master/src/apps/ethereum/tokens.py')
-    d = {}
-    exec(r.text, d)
+    LATEST_T1 = 'https://raw.githubusercontent.com/trezor/trezor-mcu/v1.6.1/firmware/ethereum_tokens.c'
+    LATEST_T2 = 'https://raw.githubusercontent.com/trezor/trezor-core/v2.0.6/src/apps/ethereum/tokens.py'
 
-    # TODO 'Qmede...' can be removed after ipfs_hash is being generated into tokens.py
-    ipfs_hash = d.get('ipfs_hash') or 'QmedefcF1fecLVpRymJJmyJFRpJuCTiNfPYBhzUdHPUq3T'
-
-    infos = {}
-    for n in networks:
-        # print("Updating info about erc20 tokens for", n[0])
-        url = 'https://gateway.ipfs.io/ipfs/%s/%s.json' % (ipfs_hash, n[0])
-        r = requests.get(url)
-        infos[n[0]] = r.json()
+    tokens = ethereum_tokens_gen.get_tokens()
+    tokens_t1 = requests.get(LATEST_T1).text
+    tokens_t2 = requests.get(LATEST_T2).text
 
     supported = []
-    for t in d['tokens']:
-        token = t[2]
-        # print('Updating', token)
+    for t in tokens:
+        # print('Updating', t['symbol'])
 
-        try:
-            network = [ n[0] for n in networks if n[1] == t[0] ][0]
-        except:
-            raise Exception("Unknown network", t[0], "for erc20 token", token)
+        if t['chain'] not in networks:
+            print('Skipping, %s is disabled' % t['chain'])
+            continue
 
-        try:
-            info = [ i for i in infos[network] if i['symbol'] == token ][0]
-        except:
-            raise Exception("Unknown details for erc20 token", token)
-
-        key = "erc20:%s:%s" % (network, token)
+        key = "erc20:%s:%s" % (t['chain'], t['symbol'])
         supported.append(key)
         out = details['coins'].setdefault(key, {})
         out['type'] = 'erc20'
-        out['network'] = network
-        out['address'] = info['address']
+        out['network'] = t['chain']
+        out['address'] = t['address']
 
-        set_default(out, 'shortcut', token)
-        set_default(out, 'name', info['name'])
-        set_default(out, 't1_enabled', 'yes')
-        set_default(out, 't2_enabled', 'yes')
+        set_default(out, 'shortcut', t['symbol'])
+        set_default(out, 'name', t['name'])
         set_default(out, 'links', {})
 
-        if info['website']:
-            out['links']['Homepage'] = info['website']
-        if info.get('social', {}).get('github', None):
-            out['links']['Github'] = info['social']['github']
+        if "\" %s\"" % t['symbol'] in tokens_t1:
+            out['t1_enabled'] = 'yes'
+        else:
+            out['t1_enabled'] = 'soon'
 
-        update_marketcap(out, out.get('coinmarketcap_alias', token))
+        if "'%s'" % t['symbol'] in tokens_t2:
+            out['t2_enabled'] = 'yes'
+        else:
+            out['t2_enabled'] = 'soon'
+
+        out['links']['MyCrypto Wallet'] = 'https://mycrypto.com'
+        out['links']['MyEtherWallet'] = 'https://www.myetherwallet.com'
+
+        if t['website']:
+            out['links']['Homepage'] = t['website']
+        if t.get('social', {}).get('github', None):
+            out['links']['Github'] = t['social']['github']
+
+        update_marketcap(out, out.get('coinmarketcap_alias', t['symbol']))
 
     check_unsupported(details, 'erc20:', supported)
 
@@ -189,10 +211,34 @@ def update_ethereum(details):
     set_default(out, 't2_enabled', 'yes')
     update_marketcap(out, 'ubiq')
 
+    out = details['coins'].setdefault('coin2:ELLA', {})
+    out['type'] = 'coin'
+    set_default(out, 'shortcut', 'ELLA')
+    set_default(out, 'name', 'Ellaism')
+    set_default(out, 't1_enabled', 'yes')
+    set_default(out, 't2_enabled', 'yes')
+    update_marketcap(out, 'ellaism')
+
+    out = details['coins'].setdefault('coin2:EGEM', {})
+    out['type'] = 'coin'
+    set_default(out, 'shortcut', 'EGEM')
+    set_default(out, 'name', 'EtherGem')
+    set_default(out, 't1_enabled', 'yes')
+    set_default(out, 't2_enabled', 'yes')
+    update_marketcap(out, 'egem')
+
+    out = details['coins'].setdefault('coin2:ETSC', {})
+    out['type'] = 'coin'
+    set_default(out, 'shortcut', 'ETSC')
+    set_default(out, 'name', 'EthereumSocial')
+    set_default(out, 't1_enabled', 'yes')
+    set_default(out, 't2_enabled', 'yes')
+    update_marketcap(out, 'etsc')
+
 def update_mosaics(details):
-    r = requests.get('https://raw.githubusercontent.com/trezor/trezor-mcu/master/firmware/nem_mosaics.json')
+    d = json.load(open('defs/nem/nem_mosaics.json'))
     supported = []
-    for mosaic in r.json():
+    for mosaic in d:
         # print('Updating', mosaic['name'], mosaic['ticker'])
 
         key = "mosaic:%s" % mosaic['ticker'].strip()
@@ -211,18 +257,44 @@ def update_mosaics(details):
 def check_missing_details(details):
     for k in details['coins'].keys():
         coin = details['coins'][k]
+        hide = False
 
         if 'links' not in coin:
             print("%s: Missing links" % k)
-            continue
+            hide = True
         if 'Homepage' not in coin['links']:
             print("%s: Missing homepage" % k)
-        if coin['t1_enabled'] not in ('yes', 'no', 'planned', 'in progress'):
+            hide = True
+        if coin['t1_enabled'] not in ('yes', 'no', 'planned', 'soon'):
             print("%s: Unknown t1_enabled" % k)
-        if coin['t2_enabled'] not in ('yes', 'no', 'planned', 'in progress'):
+            hide = True
+        if coin['t2_enabled'] not in ('yes', 'no', 'planned', 'soon'):
             print("%s: Unknown t2_enabled" % k)
+            hide = True
         if 'TREZOR Wallet' in coin['links'] and coin['links']['TREZOR Wallet'] != 'https://wallet.trezor.io':
             print("%s: Strange URL for TREZOR Wallet" % k)
+            hide = True
+
+        for w in [ x.lower() for x in coin['links'].keys() ]:
+            if 'wallet' in w or 'electrum' in w:
+                break
+        else:
+            if coin['t1_enabled'] == 'yes' or coin['t2_enabled'] == 'yes':
+                print("%s: Missing wallet" % k)
+                hide = True
+            else:
+                print("%s: Missing wallet, but not hiding" % k)
+
+        if hide:
+            # If any of important detail is missing, hide coin from list
+            coin['hidden'] = 1
+
+        if not hide and coin.get('hidden'):
+            print("%s: Details are OK, but coin is still hidden" % k)
+
+    for k in details['coins'].keys():
+        if details['coins'][k].get('hidden') == 1:
+            print("%s: Coin is hidden" % k)
 
 if __name__ == '__main__':
     try:
@@ -230,6 +302,7 @@ if __name__ == '__main__':
     except FileNotFoundError:
         details = {'coins': {}, 'info': {}}
 
+    coinmarketcap_init()
     update_coins(details)
     update_erc20(details)
     update_ethereum(details)

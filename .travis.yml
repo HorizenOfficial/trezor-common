@@ -12,11 +12,12 @@ python:
     - "3.5"
 
 install:
-    - pip install ed25519 Pillow
+    - pip install ed25519 Pillow demjson
     - pip install --no-deps trezor
 
 script:
-    - python coins-check.py
+    - jsonlint coins_details.json
+    - jsonlint defs/support.json
     - cd defs/coins/tools && python build_coins.py
 
 notifications:
