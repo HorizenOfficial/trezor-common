@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
 
+# This script generates coins.json files from the definitions in defs/
+#
+# - `./build_coins.py` generates a big file with everything
+# - `./build_coins.py XXX` generates a file with coins that are supported by XXX
+#      for example: `./build_coins.py webwallet` or `./build_coins.py trezor1`
+# - `./build_coins.py XXX --defs` also adds protobuf definitions with TOIF icon
+#
+# generated file is coins.json in current directory, and coindefs.json if --def is enabled
+
 import json
 import glob
 import re
-from hashlib import sha256
-from binascii import unhexlify
+import os
+import sys
 
-import ed25519
-from PIL import Image
+if '--defs' in sys.argv:
+    from binascii import unhexlify
+    from hashlib import sha256
+    import ed25519
+    from PIL import Image
+    from trezorlib.protobuf import dump_message
+    from coindef import CoinDef
+    BUILD_DEFS = True
+else:
+    BUILD_DEFS = False
 
-from trezorlib.protobuf import dump_message
-from coindef import CoinDef
 
-
-def check_type(val, types, nullable=False, empty=False, regex=None, choice=None):
+def check_type(val, types, nullable=False, empty=False, regex=None, choice=None):  # noqa:E501
     # check nullable
     if nullable and val is None:
         return True
@@ -46,9 +60,9 @@ def validate_coin(coin):
     assert check_type(coin['coin_shortcut'], str, regex=r'^[A-Zt][A-Z][A-Z]+$')
     assert check_type(coin['coin_label'], str, regex=r'^[A-Z]')
     assert check_type(coin['website'], str, regex=r'^http.*[^/]$')
-    assert check_type(coin['github'], str, regex=r'^https://github.com/.*[^/]$')
+    assert check_type(coin['github'], str, regex=r'^https://github.com/.*[^/]$')  # noqa:E501
     assert check_type(coin['maintainer'], str)
-    assert check_type(coin['curve_name'], str, choice=['secp256k1', 'secp256k1_decred', 'secp256k1_groestl'])
+    assert check_type(coin['curve_name'], str, choice=['secp256k1', 'secp256k1_decred', 'secp256k1_groestl'])  # noqa:E501
     assert check_type(coin['address_type'], int)
     assert check_type(coin['address_type_p2sh'], int)
     assert coin['address_type'] != coin['address_type_p2sh']
@@ -65,7 +79,7 @@ def validate_coin(coin):
     assert coin['xprv_magic'] != coin['xpub_magic_segwit_native']
     assert coin['xpub_magic'] != coin['xpub_magic_segwit_p2sh']
     assert coin['xpub_magic'] != coin['xpub_magic_segwit_native']
-    assert coin['xpub_magic_segwit_p2sh'] is None or coin['xpub_magic_segwit_native'] is None or coin['xpub_magic_segwit_p2sh'] != coin['xpub_magic_segwit_native']
+    assert coin['xpub_magic_segwit_p2sh'] is None or coin['xpub_magic_segwit_native'] is None or coin['xpub_magic_segwit_p2sh'] != coin['xpub_magic_segwit_native']  # noqa:E501
     assert check_type(coin['slip44'], int)
     assert check_type(coin['segwit'], bool)
     assert check_type(coin['decred'], bool)
@@ -143,26 +157,70 @@ def convert_icon(icon):
 
 
 def process_json(fn):
-    print(fn, end=' ... ')
+    print(os.path.basename(fn), end=' ... ')
     j = json.load(open(fn))
-    i = Image.open(fn.replace('.json', '.png'))
-    validate_coin(j)
-    validate_icon(i)
-    ser = serialize(j, convert_icon(i))
-    sig = sign(ser)
-    definition = (sig + ser).hex()
-    print('OK')
-    return j, definition
+    if BUILD_DEFS:
+        i = Image.open(fn.replace('.json', '.png'))
+        validate_coin(j)
+        validate_icon(i)
+        ser = serialize(j, convert_icon(i))
+        sig = sign(ser)
+        definition = (sig + ser).hex()
+        print('OK')
+        return j, definition
+    else:
+        print('OK')
+        return j, None
 
+
+scriptdir = os.path.dirname(os.path.realpath(__file__))
+
+
+support_json = json.load(open(scriptdir + '/../../support.json'))
+if len(sys.argv) > 1 and not sys.argv[1].startswith('-'):
+    support_list = support_json[sys.argv[1]].keys()
+else:
+    support_list = None
 
 coins = {}
 defs = {}
-for fn in glob.glob('../*.json'):
+for fn in glob.glob(scriptdir + '/../*.json'):
     c, d = process_json(fn)
     n = c['coin_name']
-    coins[n] = c
-    defs[n] = d
+    c['support'] = {}
+    for s in support_json.keys():
+        c['support'][s] = support_json[s][n] if n in support_json[s] else None
+    if support_list is None or n in support_list:
+        coins[n] = c
+        defs[n] = d
 
+json.dump(coins, open('coins.json', 'w'), indent=4, sort_keys=True)
+if BUILD_DEFS:
+    json.dump(defs, open('coindefs.json', 'w'), indent=4, sort_keys=True)
 
-json.dump(coins, open('../../coins.json', 'w'), indent=4, sort_keys=True)
-json.dump(defs, open('../../coindefs.json', 'w'), indent=4, sort_keys=True)
+# check for colliding address versions
+at_p2pkh = {}
+at_p2sh = {}
+
+for n, c in coins.items():
+    if c['cashaddr_prefix']:  # skip cashaddr currencies
+        continue
+    a1, a2 = c['address_type'], c['address_type_p2sh']
+    if a1 not in at_p2pkh:
+        at_p2pkh[a1] = []
+    if a2 not in at_p2sh:
+        at_p2sh[a2] = []
+    at_p2pkh[a1].append(n)
+    at_p2sh[a2].append(n)
+
+print()
+print('Colliding address_types for P2PKH:')
+for k, v in at_p2pkh.items():
+    if len(v) > 2:
+        print('-', k, ':', ','.join(v))
+
+print()
+print('Colliding address_types for P2SH:')
+for k, v in at_p2sh.items():
+    if len(v) > 2:
+        print('-', k, ':', ','.join(v))

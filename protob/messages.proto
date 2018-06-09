@@ -105,6 +105,9 @@ enum MessageType {
 	MessageType_LiskAddress = 115 [(wire_out) = true];
 	MessageType_LiskSignTx = 116 [(wire_in) = true];
 	MessageType_LiskSignedTx = 117 [(wire_out) = true];
+	MessageType_LiskSignMessage = 118 [(wire_in) = true];
+	MessageType_LiskMessageSignature = 119 [(wire_out) = true];
+	MessageType_LiskVerifyMessage = 120 [(wire_in) = true];
 	MessageType_LiskGetPublicKey = 121 [(wire_in) = true];
 	MessageType_LiskPublicKey = 122 [(wire_out) = true];
 
@@ -655,7 +658,8 @@ message SignTx {
 	optional string coin_name = 3 [default='Bitcoin'];	// coin to use
 	optional uint32 version = 4 [default=1];		// transaction version
 	optional uint32 lock_time = 5 [default=0];		// transaction lock_time
-	optional uint32 decred_expiry = 6;
+	optional uint32 expiry = 6;				// only for Decred and Zcash
+	optional bool overwintered = 7;				// only for Zcash
 }
 
 /**
@@ -674,6 +678,8 @@ message SimpleSignTx {
 	optional string coin_name = 4 [default='Bitcoin'];	// coin to use
 	optional uint32 version = 5 [default=1];		// transaction version
 	optional uint32 lock_time = 6 [default=0];		// transaction lock_time
+	optional uint32 expiry = 7;				// only for Decred and Zcash
+	optional bool overwintered = 8;				// only for Zcash
 }
 
 /**
@@ -1292,6 +1298,36 @@ message LiskPublicKey {
 */
 message LiskSignedTx {
 	optional bytes signature = 1;
+}
+
+/**
+* Request: Ask device to sign message
+* @next LiskMessageSignature
+* @next Failure
+*/
+message LiskSignMessage {
+	repeated uint32 address_n = 1;
+	optional bytes message = 2;
+}
+
+/**
+* Response: Signed message
+* @prev LiskSignMessage
+*/
+message LiskMessageSignature {
+	optional bytes public_key = 1;
+	optional bytes signature = 2;
+}
+
+/**
+* Request: Ask device to verify message
+* @next Success
+* @next Failure
+*/
+message LiskVerifyMessage {
+	optional bytes public_key = 1;
+	optional bytes signature = 2;
+	optional bytes message = 3;
 }
 
 /////////////////////////////////////////////////////////////
